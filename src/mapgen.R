@@ -7,11 +7,7 @@ library(XML) # Web scraping for school addresses
 library(ggmap) # For mapping
 library(rgeos) # for constructing buffers
 library(extrafont) # for school symbol
-font_import(pattern="Symbola", prompt=FALSE)
-
-# Read our spatial datasets
-routes <- readOGR(dsn="./data/", layer="routes")
-crossings <- readOGR(dsn="./data/", layer="crossings")
+loadfonts(quiet=TRUE)
 
 getschoolsaddress <- function() {
   # Get our POI addresses
@@ -22,6 +18,7 @@ getschoolsaddress <- function() {
   SPSdf$Name <- gsub("\\s+", " ", gsub("Â", "", SPSdf$Name))
   SPSdf$Address <- gsub("\\s+$", "", gsub("(Â|\r\n.+$)", "", SPSdf$Address))
   row.names(SPSdf) <- NULL
+  SPSdf$id <- as.numeric(row.names(SPSdf))
   SPSdf
   # Uncomment to purge "Skills Center" results
   # SPSdf[SPSdf$Name == "Skills Center", ]
@@ -47,45 +44,103 @@ bufferpoi <- function(spatialpointsdf, dist) {
   spTransform(buff, CRS("+init=EPSG:4326"))
 }
 
-  
-  
-plotpoi <- function(allpoi, poi, routes, crossings) {
-    # takes an SPointsDF with all poi (because context) and a single focal poi
-    # returns a ggmap object with the requisite features
-    
-    # buffer our POIs at .25mi, .5mi, and useful zoom level
-    m.25mi <- fortify(bufferpoi(poi, 402.336))
-    m.50mi <- fortify(bufferpoi(poi, 804.672))
-    m.zoom <- fortify(bufferpoi(poi, 1005.84))
-    
-    # Fortify and split routes
-    routes.fort <- fortify(routes)
-    routes@data$id <- row.names(routes)
-    routes.fort <- merge(x=routes.fort, y=subset(routes@data, select=c("id", "Priority")), by="id")
-    routes.fort$Priority <- as.factor(routes.fort$Priority)
-    
-    # Fake fort
-    crossings.fort <- data.frame(crossings@coords, Rank=as.character(crossings@data$Rank))
-    
-    # Additional crop factor
-    cfactor <- .001
-    
-    gmapdata <- get_map(location=poi@coords, zoom=15, scale=2, maptype="roadmap")
-    mp <- ggmap(gmapdata, extent="normal", maprange=FALSE) +
-      geom_polygon(data=m.25mi, aes(x=long, y=lat, group=group),
-                   linetype=3, colour="grey", alpha=.05, size=1.1) +
-      geom_polygon(data=m.50mi, aes(x=long, y=lat, group=group),
-                   linetype=1, colour="darkgrey", alpha=.05, size=1.1) +
-      geom_line(data=routes.fort, mapping=aes(x=long, y=lat, group=id, linetype=Priority),
-                size=1, colour="darkgreen") +
-      geom_point(data=crossings.fort, mapping=aes(x=coords.x1, y=coords.x2, shape=Rank),
-                 color="red", size=4) +
-      geom_text(data=data.frame(poi@coords),
-                aes(x=lon, y=lat, label="∆", family="Symbola"),
-                size=16) +
-      coord_map(projection="mercator",
-                xlim=c(min(m.zoom$long), max(m.zoom$long)),
-                ylim=c(min(m.zoom$lat), max(m.zoom$lat))) +
-      theme_nothing()
-    mp
+readroutes <- function(dsn, layer) {
+  # Read and project the layer
+  routes <- readOGR(dsn, layer)
+  routes <- spTransform(routes, CRS("+init=EPSG:4326"))
+  # Fortify the routes into a set of points
+  routes.fort <- fortify(routes)
+  routes@data$id <- row.names(routes)
+  routes.fort <- merge(x=routes.fort, y=routes@data, by="id")
+  # Recode our route priorities from messy data
+  routes.fort$Priority <- NA # base case
+  routes.fort$Priority[routes.fort$Existing == "N"] <- "Future"
+  routes.fort$Priority[routes.fort$SNG == 1] <- "Okay"
+  routes.fort$Priority[routes.fort$SNG_best == 1] <- "Best"
+  routes.fort$Priority <- as.factor(routes.fort$Priority)
+  routes.fort
 }
+
+readcrossings <- function(dsn, layer) {
+  # Read and project the layer
+  crossings <- readOGR(dsn, layer)
+  crossings <- spTransform(crossings, CRS("+init=EPSG:4326"))
+  # Fortify the layer into a set of points
+  crossings.fort <-
+    data.frame(crossings@coords, Rank=as.character(crossings@data$Rank))
+  crossings.fort$Rank <- gsub(".+[0-9]$", "", crossings.fort$Rank)
+  crossings.fort
+}
+
+
+plotpoi <- function(allpoi, poi, fortifiedroutes, fortifiedcrossings) {
+  # takes an SPointsDF with all poi (because context) and a single focal poi
+  # returns a ggmap object with the requisite features
+  
+  # buffer our POIs at .25mi, .5mi, and useful zoom level
+  m.25mi <- fortify(bufferpoi(poi, 402.336))
+  m.50mi <- fortify(bufferpoi(poi, 804.672))
+  m.zoom <- fortify(bufferpoi(poi, 1005.84))
+  
+  # Build the plot object
+  gmapdata <- get_map(location=poi@coords, zoom=15, scale=2, maptype="roadmap")
+  mp <- ggmap(gmapdata, extent="normal", maprange=FALSE) +
+    geom_polygon(data=m.25mi, aes(x=long, y=lat, group=group),
+                 linetype=3, colour="grey", alpha=.05, size=1.1) +
+    geom_polygon(data=m.50mi, aes(x=long, y=lat, group=group),
+                 linetype=1, colour="darkgrey", alpha=.05, size=1.1) +
+    geom_line(data=fortifiedroutes, mapping=aes(x=long, y=lat, group=id, linetype=Priority),
+              size=1, colour="darkgreen") +
+    geom_point(data=fortifiedcrossings, mapping=aes(x=coords.x1, y=coords.x2, shape=Rank),
+               color="red", size=4) +
+    geom_text(data=data.frame(poi@coords),
+              aes(x=lon, y=lat, label="∆", family="Symbola"),
+              size=16) +
+    geom_text(data=data.frame(subset(allpoi, Name != poi$Name)@coords),
+              aes(x=lon, y=lat, label="∆", family="Symbola"),
+              size=10, alpha=.5) +
+    coord_map(projection="mercator",
+              xlim=c(min(m.zoom$long), max(m.zoom$long)),
+              ylim=c(min(m.zoom$lat), max(m.zoom$lat))) +
+    theme_nothing()
+  mp
+}
+
+writemap <- function(geocodedpois, routes, crossings) {
+  for(i in geocodedpois@data$id) {
+    mp <- plotpoi(geocodedpois, geocodedpois[i,], routes, crossings)
+    fname <- paste("./output/", i, ".png", sep="")
+    ggsave(filename=fname, mp, width=6, height=6, units="in", dpi=300)
+  }
+}
+
+writelatex <- function(geocodedpois) {
+  pre <- readLines("./src/atlaspreamble.tex")
+  minipg <- readLines("./src/atlasminipage.tex")
+  post <- readLines("./src/atlaspost.tex")
+  mid <- c()
+  for(i in geocodedpois@data$id) {
+    s <- gsub("SCHOOL", geocodedpois@data$Name[i], minipg)
+    s <- gsub("ADDRESS", geocodedpois@data$Address[i], s)
+    s <- gsub("MAPNUMBER", geocodedpois@data$id[i], s)
+    mid <- c(mid, s)
+  }
+  writeLines(c(pre,mid,post), "./output/altas.tex")
+}
+
+main <- function() {
+  # Read our spatial datasets
+  routes <- readroutes(dsn="./data/", layer="bmp")
+  crossings <- readcrossings(dsn="./data/Intersections.kml", layer="Greenway2014collapsed.xlsx")
+  
+  # Geocode our schools and maybe other POIs
+  pois <- geocodepoi()
+  
+  # Output our maps to .png format
+  writemap(pois, routes, crossings)
+  
+  # Emit LaTeX for compiling into a .PDF
+  writelatex(pois)
+}
+
+main()

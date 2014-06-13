@@ -9,7 +9,7 @@ library(rgeos) # for constructing buffers
 library(extrafont) # for school symbol
 loadfonts(quiet=TRUE)
 
-getschoolsaddress <- function() {
+getspsschoolsaddress <- function() {
   # Get our POI addresses
   SPSurl <- "http://goo.gl/GoJu3U"
   SPSaddresses <- readHTMLTable(SPSurl, which=3:8, header=TRUE) # addresses table
@@ -19,6 +19,7 @@ getschoolsaddress <- function() {
   SPSdf$Address <- gsub("\\s+$", "", gsub("(Â|\r\n.+$)", "", SPSdf$Address))
   row.names(SPSdf) <- NULL
   SPSdf$id <- as.numeric(row.names(SPSdf))
+  SPSdf$type <- "school"
   SPSdf
   # Uncomment to purge "Skills Center" results
   # SPSdf[SPSdf$Name == "Skills Center", ]
@@ -27,7 +28,7 @@ getschoolsaddress <- function() {
 geocodepoi <- function() {
   # Calls getschooladdress for a dataframe,
   # Return a SpatialPointsDataFrame with Name, Address in @data slot
-  schooldf <- getschoolsaddress()
+  schooldf <- getspsschoolsaddress()
   gstring <- paste(schooldf$Name, schooldf$Address, "Seattle, WA", sep=", ")
   latlon <- geocode(gstring)
   spdf <- cbind(schooldf, latlon)
@@ -66,9 +67,9 @@ readcrossings <- function(dsn, layer) {
   crossings <- readOGR(dsn, layer)
   crossings <- spTransform(crossings, CRS("+init=EPSG:4326"))
   # Fortify the layer into a set of points
+  # Use SymbolID instead of Rank, because it seems to be consistent
   crossings.fort <-
-    data.frame(crossings@coords, Rank=as.character(crossings@data$Rank))
-  crossings.fort$Rank <- gsub(".+[0-9]$", "", crossings.fort$Rank)
+    data.frame(crossings@coords, Rank=as.factor(crossings@data$SymbolID))
   crossings.fort
 }
 
@@ -92,7 +93,8 @@ plotpoi <- function(allpoi, poi, fortifiedroutes, fortifiedcrossings) {
     geom_line(data=fortifiedroutes, mapping=aes(x=long, y=lat, group=id, linetype=Priority),
               size=1, colour="darkgreen") +
     geom_point(data=fortifiedcrossings, mapping=aes(x=coords.x1, y=coords.x2, shape=Rank),
-               color="red", size=4) +
+               color="red", size=8) +
+    scale_shape_manual(values=c(16, 17)) +
     geom_text(data=data.frame(poi@coords),
               aes(x=lon, y=lat, label="∆", family="Symbola"),
               size=16) +

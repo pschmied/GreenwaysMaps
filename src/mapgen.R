@@ -128,7 +128,7 @@ writelatex <- function(geocodedpois) {
     s <- gsub("MAPNUMBER", geocodedpois@data$id[i], s)
     mid <- c(mid, s)
   }
-  writeLines(c(pre,mid,post), "./output/altas.tex")
+  writeLines(c(pre,mid,post), "./output/atlas.tex")
 }
 
 main <- function() {

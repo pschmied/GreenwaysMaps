@@ -46,9 +46,11 @@ bufferpoi <- function(spatialpointsdf, dist) {
 }
 
 readroutes <- function(dsn, layer) {
-  # Read and project the layer
+  # Read, project, and simplify the layer
   routes <- readOGR(dsn, layer)
   routes <- spTransform(routes, CRS("+init=EPSG:4326"))
+  sim <- gSimplify(routes, tol=0.0001)
+  routes <- SpatialLinesDataFrame(sim, routes@data)
   # Fortify the routes into a set of points
   routes.fort <- fortify(routes)
   routes@data$id <- row.names(routes)
@@ -56,8 +58,7 @@ readroutes <- function(dsn, layer) {
   # Recode our route priorities from messy data
   routes.fort$Priority <- NA # base case
   routes.fort$Priority[routes.fort$Existing == "N"] <- "Future"
-  routes.fort$Priority[routes.fort$SNG == 1] <- "Okay"
-  routes.fort$Priority[routes.fort$SNG_best == 1] <- "Best"
+  routes.fort$Priority[routes.fort$Existing == "Y"] <- "Recommended"
   routes.fort$Priority <- as.factor(routes.fort$Priority)
   routes.fort
 }
